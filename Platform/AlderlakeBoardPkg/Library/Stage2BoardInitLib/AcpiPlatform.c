@@ -1,6 +1,6 @@
 /** @file
 
-  Copyright (c) 2020 - 2022, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2020 - 2023, Intel Corporation. All rights reserved.<BR>
   SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
@@ -281,12 +281,15 @@ PlatformUpdateAcpiTable (
   Ptr  = (UINT8 *)Table;
   End  = (UINT8 *)Table + Table->Length;
 
+  FeaturesCfgData = (FEATURES_CFG_DATA *) FindConfigDataByTag (CDATA_FEATURES_TAG);
+
   if (Table->Signature == EFI_ACPI_5_0_EMBEDDED_CONTROLLER_BOOT_RESOURCES_TABLE_SIGNATURE) {
     SiCfgData = (SILICON_CFG_DATA *)FindConfigDataByTag (CDATA_SILICON_TAG);
     if ((SiCfgData == NULL) || (SiCfgData->EcAvailable == 0)) {
       return EFI_UNSUPPORTED;
     }
   }
+
   if (Table->Signature == EFI_ACPI_5_0_DIFFERENTIATED_SYSTEM_DESCRIPTION_TABLE_SIGNATURE) {
     for (; Ptr < End; Ptr++) {
       if (*(Ptr-1) != AML_NAME_OP)
@@ -353,6 +356,15 @@ PlatformUpdateAcpiTable (
       }
     }
     return EFI_UNSUPPORTED;
+  } else if (Table->OemTableId == SIGNATURE_64 ('D', 'p', 't', 'f', 'T', 'a', 'b', 'l')) { //DptfTabl
+    DEBUG ((DEBUG_INFO, "Find DptfTabl table\n"));
+
+    if (FeaturesCfgData != NULL && FeaturesCfgData->Features.DTT == 1){
+      //return success if DTT feature is set and dptf table is found
+      DEBUG ((DEBUG_INFO, "Found DptfTabl table succcessfully\n"));
+      return EFI_SUCCESS;
+    }
+    return EFI_UNSUPPORTED;
   } else if (Table->Signature == EFI_BDAT_TABLE_SIGNATURE) {
     FspHobList = GetFspHobListPtr ();
     if (FspHobList != NULL) {
@@ -409,7 +421,6 @@ PlatformUpdateAcpiTable (
   } else if (Table->Signature == EFI_ACPI_6_3_FIXED_ACPI_DESCRIPTION_TABLE_SIGNATURE) {
     DEBUG ((DEBUG_INFO, "Updated FADT Table entries in AcpiTable\n"));
     FadtPointer = (EFI_ACPI_6_3_FIXED_ACPI_DESCRIPTION_TABLE *) Table;
-    FeaturesCfgData = (FEATURES_CFG_DATA *) FindConfigDataByTag (CDATA_FEATURES_TAG);
     if (FeaturesCfgData != NULL) {
       if (FeaturesCfgData->Features.S0ix == 1) {
         DEBUG ((DEBUG_INFO, "Enable S0ix / Low Power S0 Idle Capable ACPI flag.\n"));
@@ -423,6 +434,22 @@ PlatformUpdateAcpiTable (
     if (GetCpuSku() == 0) {   // ADL-S
       FadtPointer->PreferredPmProfile = 0x2;  //mobile
     }
+  } else if (CompareMem (&Table->OemId,  "Rtd3", 4) == 0) {
+    // Load RTD3 SSDT table for ADL RVP/CRB SKUs
+    // Note: "OemId" field is used to indentify whether SSDT table is for RTD3 usage
+
+    Status = EFI_UNSUPPORTED;
+    if (GlobalNvs->PlatformNvs.Rtd3Support == 1) {
+
+      // return EFI_SUCCESS only when PlatformID matches
+      if (GetPlatformId () == BoardIdAdlNDdr5Crb && Table->OemTableId == SIGNATURE_64('A', 'd', 'l', 'N' ,'_' ,'C' ,'r' ,'b')) {
+        Status = EFI_SUCCESS;
+      } else if (GetPlatformId () == BoardIdAdlNLp5Rvp && Table->OemTableId == SIGNATURE_64('A', 'd', 'l', 'N' ,'_' ,'R' ,'v' ,'p')) {
+        Status = EFI_SUCCESS;
+      }
+      DEBUG ((DEBUG_INFO, "Board SsdtRtd3 Table: %x\n", Table->OemTableId));
+    }
+    return Status;
   }
 
   if (MEASURED_BOOT_ENABLED()) {
@@ -457,6 +484,15 @@ PlatformUpdateAcpiTable (
           DEBUG ( (DEBUG_INFO, "Updated Psd Table in AcpiTable Entries\n") );
         }
       }
+    }
+  }
+
+  if (Table->Signature == EFI_ACPI_6_4_BOOT_ERROR_RECORD_TABLE_SIGNATURE) {
+    Status = UpdateCrashLogBertTable((EFI_ACPI_6_4_BOOT_ERROR_RECORD_TABLE_HEADER*)Current);
+    DEBUG ( (DEBUG_INFO, "Updated BERT Table in AcpiTable Entries %r\n", Status) );
+    // If error updating BERT, don't install the table
+    if (EFI_ERROR(Status)) {
+      return Status;
     }
   }
 
@@ -726,6 +762,7 @@ PlatformUpdateAcpiGnvs (
   PchNvs      = (PCH_NVS_AREA *) &GlobalNvs->PchNvs;
   CpuNvs      = (CPU_NVS_AREA *) &GlobalNvs->CpuNvs;
   SaNvs       = (SYSTEM_AGENT_NVS_AREA *) &GlobalNvs->SaNvs;
+  FeaturesCfgData = (FEATURES_CFG_DATA *) FindConfigDataByTag (CDATA_FEATURES_TAG);
 
   FspsUpd     = (FSPS_UPD *)(UINTN)PcdGet32 (PcdFspsUpdPtr);
   FspsConfig  = &FspsUpd->FspsConfig;
@@ -914,11 +951,32 @@ PlatformUpdateAcpiGnvs (
   PlatformNvs->PowerState                   = 1;
   if ((SiCfgData != NULL) && (SiCfgData->EcAvailable)) {
     PlatformNvs->EcAvailable            = SiCfgData->EcAvailable;
+    DEBUG ((DEBUG_INFO, "SiCfgData->EcAvailable  = 0x%X\n",SiCfgData->EcAvailable));
     if (PlatformNvs->EcAvailable == 1) {
       PlatformNvs->EcLowPowerMode         = 0;
       PlatformNvs->EcSmiGpioPin           = GPIO_VER4_S_GPP_B4;
       PlatformNvs->EcLowPowerModeGpioPin  = 0;
     }
+  }
+  if ((SiCfgData != NULL) && (SiCfgData->EcAvailable == 0)){
+      PlatformNvs->PcdIT8659SIO = 1;
+      PlatformNvs->PcdIT8659HWMON = 1;
+      PlatformNvs->PcdIT8659COM = 1;
+  }
+    //
+    // Intel(R) Dynamic Tuning Technology Devices and trip points
+    //
+  if (FeaturesCfgData != NULL && FeaturesCfgData->Features.DTT == 1){
+    DEBUG ((DEBUG_INFO, "Updating Fans and sensors devices in PlatformNvs\n"));
+    PlatformNvs->EnableDptf       = 1;
+    PlatformNvs->EnableFan1Device = 1;
+    PlatformNvs->EnableFan2Device = 1;
+    PlatformNvs->EnableFan3Device = 1;
+    PlatformNvs->EnableSen1Participant = 1;
+    PlatformNvs->EnableSen2Participant = 1;
+    PlatformNvs->EnableSen3Participant = 1;
+    PlatformNvs->EnableSaDevice        = 1;
+    PlatformNvs->EnableInt3400Device   = 1;
   }
 
   SysCpuInfo = MpGetInfo ();
@@ -937,7 +995,6 @@ PlatformUpdateAcpiGnvs (
   PlatformNvs->PlatformFlavor = FlavorDesktop;
   PlatformNvs->BoardRev = 1;
   PlatformNvs->BoardType = 0;
-  FeaturesCfgData = (FEATURES_CFG_DATA *) FindConfigDataByTag (CDATA_FEATURES_TAG);
   if (FeaturesCfgData != NULL) {
     if (FeaturesCfgData->Features.S0ix == 1) {
       PlatformNvs->LowPowerS0Idle                   = 1;
@@ -959,11 +1016,6 @@ PlatformUpdateAcpiGnvs (
   PlatformNvs->PassiveTc2Value              = 5;
   PlatformNvs->PassiveTspValue              = 10;
   PlatformNvs->CriticalThermalTripPoint     = 119;
-
-  //
-  // Intel(R) Dynamic Tuning Technology Devices and trip points
-  //
-  PlatformNvs->EnableDptf                   = 0;
 
   //
   // Wireless
@@ -1049,9 +1101,7 @@ PlatformUpdateAcpiGnvs (
   case PLATFORM_ID_ADL_S_ADP_S_DDR5_UDIMM_1DC_CRB:
   case PLATFORM_ID_ADL_S_ADP_S_DDR5_SODIMM_CRB:
     PlatformNvs->PcieSlot1PowerEnableGpio = GPIO_VER4_S_GPP_E1;
-
     PlatformNvs->PegSlot2PwrEnableGpioPolarity = 0;
-
     PlatformNvs->PchM2SsdPowerEnableGpio = GPIO_VER4_S_GPP_K11;
     break;
   case PLATFORM_ID_ADL_PS_DDR5_CRB:
@@ -1113,7 +1163,7 @@ PlatformUpdateAcpiGnvs (
     PlatformNvs->PcieSlot1PowerEnableGpio = GPIO_VER2_LP_GPP_A8;
     PlatformNvs->PcieSlot1RstGpio = GPIO_VER2_LP_GPP_F10;
     PlatformNvs->PcieSlot1RpNumber = 9;
-    PlatformNvs->PcieSlot2WakeGpio = GPIO_VER4_S_GPP_F1;
+    PlatformNvs->PcieSlot2WakeGpio = 0;
     PlatformNvs->PcieSlot2RpNumber = 0;
     PlatformNvs->PcieSlot2PowerEnableGpio = 0;
     PlatformNvs->PcieSlot2PowerEnableGpioPolarity = 0;
@@ -1151,11 +1201,6 @@ PlatformUpdateAcpiGnvs (
     PlatformNvs->PegSlot2RstGpioPolarity = 0;
     PlatformNvs->PegSlot2WakeGpioPin = 0;
     PlatformNvs->PegSlot2RootPort = 0;
-    //PlatformNvs->PegSlot3PwrEnableGpioNo = 0;
-    //PlatformNvs->PegSlot3PwrEnableGpioPolarity = 0;
-    //PlatformNvs->PegSlot3RstGpioNo = 0;
-    //PlatformNvs->PegSlot3RstGpioPolarity = 0;
-    //PlatformNvs->PegSlot3WakeGpioPin = 0;
     PlatformNvs->FoxLanWakeGpio = GPIO_VER2_LP_GPD2;
     PlatformNvs->FoxLanDisableNGpio = GPIO_VER2_LP_GPP_E5;
     PlatformNvs->FoxLanDisableNGpioPolarity = 1;
@@ -1183,7 +1228,7 @@ PlatformUpdateAcpiGnvs (
   PlatformNvs->SensorStandby = 0x0;
   PlatformNvs->Rtd3Config0 = 0x0;
   PlatformNvs->Rtd3Config1 = 0x0;
-  PlatformNvs->StorageRtd3Support = 0x1;
+  PlatformNvs->StorageRtd3Support = 0x2;
 
   PlatformNvs->Rp08D3ColdDisable = 0x0;
   PlatformNvs->Rp08D3ColdSupport = 0x0;
@@ -1242,7 +1287,8 @@ PlatformUpdateAcpiGnvs (
   SaNvs->PcieLtrMaxNoSnoopLatency[2] = 0x8C8;
   SaNvs->PcieLtrMaxNoSnoopLatency[3] = 0x8C8;
   SaNvs->SlotSelection = 1;
-  SaNvs->CpuPcieRtd3 = 1;
+  SaNvs->CpuPcieRtd3   = 1;
+  SaNvs->VmdEnable     = FspsConfig ->VmdEnable;
 
   PlatformNvs->PpmFlags           = CpuNvs->PpmFlags;
   SocUpdateAcpiGnvs ((VOID *)GnvsIn);

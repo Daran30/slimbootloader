@@ -1,6 +1,6 @@
 /** @file
 
-  Copyright (c) 2020 - 2022, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2020 - 2023, Intel Corporation. All rights reserved.<BR>
   SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
@@ -198,21 +198,34 @@ UpdateFspConfig (
   IN  VOID  *FspmUpdPtr
   )
 {
-  FSPM_UPD        *FspmUpd;
-  FSP_M_CONFIG    *Fspmcfg;
+  FSPM_UPD                    *FspmUpd;
+  FSP_M_CONFIG                *Fspmcfg;
   MEMORY_CFG_DATA             *MemCfgData;
   GRAPHICS_CFG_DATA           *GfxCfgData;
   PLATFORM_DATA               *PlatformData;
   FEATURES_CFG_DATA           *FeaturesCfgData;
   SILICON_CFG_DATA            *SiCfgData;
-  UINT16           PlatformId;
-  UINT8            SaDisplayConfigTable[16] = { 0 };
-  UINT8            Index;
-  UINT8            DebugPort;
-  UINT32           SpdData[9];
+  UINT16                      PlatformId;
+  UINT8                       SaDisplayConfigTable[16] = { 0 };
+  UINT8                       Index;
+  UINT8                       DebugPort;
+  UINT32                      SpdData[9];
+  UINT32                      CarBase;
+  UINT32                      CarSize;
+  EFI_STATUS                  Status;
 
   FspmUpd = (FSPM_UPD *)FspmUpdPtr;
   Fspmcfg = &FspmUpd->FspmConfig;
+
+  Status = GetTempRamInfo (&CarBase, &CarSize);
+  ASSERT_EFI_ERROR (Status);
+  FspmUpd->FspmArchUpd.StackBase = CarBase \
+                                 + FixedPcdGet32 (PcdStage1StackBaseOffset) \
+                                 + FixedPcdGet32 (PcdStage1StackSize) \
+                                 + FixedPcdGet32 (PcdStage1DataSize);
+  FspmUpd->FspmArchUpd.StackSize = CarBase + CarSize - FspmUpd->FspmArchUpd.StackBase;
+  DEBUG ((DEBUG_INFO, "CAR Base 0x%X (0x%X)\n", CarBase, CarSize));
+  DEBUG ((DEBUG_INFO, "FSPM Stack Base=0x%X, Size=0x%X\n", FspmUpd->FspmArchUpd.StackBase, FspmUpd->FspmArchUpd.StackSize));
 
   DEBUG ((DEBUG_INFO, "FSPM CfgData assignment\n"));
   MemCfgData = (MEMORY_CFG_DATA *)FindConfigDataByTag (CDATA_MEMORY_TAG);
@@ -224,7 +237,7 @@ UpdateFspConfig (
 
   DebugPort = GetDebugPort ();
   if (DebugPort < GetPchMaxSerialIoUartControllersNum ()) {
-    Fspmcfg->PcdDebugInterfaceFlags = BIT4 | BIT5 | BIT1;
+    Fspmcfg->PcdDebugInterfaceFlags = BIT4 | BIT5;
     Fspmcfg->SerialIoUartDebugControllerNumber = DebugPort;
     Fspmcfg->SerialIoUartDebugMode = 4;
   } else {
@@ -398,8 +411,8 @@ UpdateFspConfig (
   PlatformData = (PLATFORM_DATA *)GetPlatformDataPtr ();
   if (PlatformData != NULL) {
     PlatformData->PlatformFeatures.VtdEnable = (!MemCfgData->VtdDisable) & FeaturePcdGet (PcdVtdEnabled);
+    Fspmcfg->VtdDisable   = (UINT8)(!PlatformData->PlatformFeatures.VtdEnable);
     if (PlatformData->PlatformFeatures.VtdEnable == 1) {
-      Fspmcfg->VtdDisable   = (UINT8)(!PlatformData->PlatformFeatures.VtdEnable);
       Fspmcfg->VtdIgdEnable = MemCfgData->VtdIgdEnable;
       Fspmcfg->VtdIpuEnable = 0x1;
       Fspmcfg->VtdIopEnable = 0x1;
@@ -496,10 +509,10 @@ UpdateFspConfig (
     Fspmcfg->DciModphyPg                  = 0;
     Fspmcfg->DciUsb3TypecUfpDbg           = 2;
     Fspmcfg->DebugInterfaceLockEnable     = TRUE;
-    Fspmcfg->DciDbcMode                   = DciDbcNoChange; // 4
+    Fspmcfg->DciDbcMode                   = DciDbcNoChange;
     Fspmcfg->DciEn                        = MemCfgData->DciEn;
-    Fspmcfg->CpuTraceHubMode              = MemCfgData->CpuTraceHubMode; // 2
-    Fspmcfg->PchTraceHubMode              = MemCfgData->PchTraceHubMode; // 2
+    Fspmcfg->CpuTraceHubMode              = MemCfgData->CpuTraceHubMode;
+    Fspmcfg->PchTraceHubMode              = MemCfgData->PchTraceHubMode;
     Fspmcfg->CpuTraceHubMemReg0Size       = MemCfgData->CpuTraceHubMemReg0Size;
     Fspmcfg->CpuTraceHubMemReg1Size       = MemCfgData->CpuTraceHubMemReg1Size;
     Fspmcfg->PchTraceHubMemReg0Size       = MemCfgData->PchTraceHubMemReg0Size;
@@ -589,6 +602,7 @@ UpdateFspConfig (
         Fspmcfg->Lp5CccConfig = 0xff;
         break;
       case PLATFORM_ID_ADL_P_DDR5_RVP:
+        Fspmcfg->DdiPortAConfig = 0x1;
         Fspmcfg->DdiPortBHpd = 0x1;
         Fspmcfg->PrmrrSize = 0x200000;
         Fspmcfg->PcieClkReqGpioMux[9] = 0x796e9000;
@@ -624,7 +638,7 @@ UpdateFspConfig (
         Fspmcfg->Lp5CccConfig = 0xff;
         Fspmcfg->SkipCpuReplacementCheck = 0x0;
         Fspmcfg->FirstDimmBitMask = 0x0;
-        //Fspmcfg->FirstDimmBitMaskEcc = 0x0;
+        Fspmcfg->FirstDimmBitMaskEcc = 0x0;
         Fspmcfg->Lp5BankMode = 0x0;
         break;
       case PLATFORM_ID_ADL_N_LPDDR5_RVP:
@@ -642,12 +656,10 @@ UpdateFspConfig (
   }
 
   // Tcc enabling
-  if (IsPchS() || IsPchN()) {
 #if FixedPcdGet8 (PcdTccEnabled)
-    Fspmcfg->WdtDisableAndLock = 0x0;
-    TccModePreMemConfig (FspmUpd);
+  Fspmcfg->WdtDisableAndLock = 0x0;
+  TccModePreMemConfig (FspmUpd);
 #endif
-  }
 
   // S0ix is disabled if TSN is enabled.
   FeaturesCfgData = (FEATURES_CFG_DATA *) FindConfigDataByTag (CDATA_FEATURES_TAG);
@@ -689,4 +701,12 @@ UpdateFspConfig (
       }
     }
   }
+#if FixedPcdGetBool(PcdFusaSupport)
+  if ((SiCfgData != NULL) && (SiCfgData->FusaConfigEnable)) {
+    DEBUG((DEBUG_INFO, "FuSa enabled. Overriding CpuCrashLog and IBECC settings to Enabled - All requests protected.\n"));
+    Fspmcfg->CpuCrashLogEnable = 1;
+    Fspmcfg->Ibecc = 1;
+    Fspmcfg->IbeccOperationMode = 2;
+  }
+#endif
 }

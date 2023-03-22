@@ -1,7 +1,7 @@
 ## @file
 # Provides bootloader driver related package definitions.
 #
-# Copyright (c) 2016 - 2022, Intel Corporation. All rights reserved.<BR>
+# Copyright (c) 2016 - 2023, Intel Corporation. All rights reserved.<BR>
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 #
 ##
@@ -87,8 +87,9 @@
   gPlatformModuleTokenSpaceGuid.PcdMrcDataSize            | 0x00000000 | UINT32 | 0x2000008B
   gPlatformModuleTokenSpaceGuid.PcdUcodeBase              | 0x00000000 | UINT32 | 0x2000008C
   gPlatformModuleTokenSpaceGuid.PcdUcodeSize              | 0x00000000 | UINT32 | 0x2000008D
-  gPlatformModuleTokenSpaceGuid.PcdVariableRegionBase     | 0x00000000 | UINT32 | 0x2000008E
-  gPlatformModuleTokenSpaceGuid.PcdVariableRegionSize     | 0x00000000 | UINT32 | 0x2000008F
+  gPlatformModuleTokenSpaceGuid.PcdUcodeSlotSize          | 0x00000000 | UINT32 | 0x2000008E
+  gPlatformModuleTokenSpaceGuid.PcdVariableRegionBase     | 0x00000000 | UINT32 | 0x2000008F
+  gPlatformModuleTokenSpaceGuid.PcdVariableRegionSize     | 0x00000000 | UINT32 | 0x20000090
 
   gPlatformModuleTokenSpaceGuid.PcdMemoryMapEntryNumber   | 0x00000000 | UINT32 | 0x200000A2
   gPlatformModuleTokenSpaceGuid.PcdOsBootOptionNumber     | 0x00000008 | UINT32 | 0x200000A3
@@ -170,7 +171,7 @@
 
   # The number of 0.6s ticks to wait before assuming boot failure and forcing a reboot
   gPlatformModuleTokenSpaceGuid.PcdTcoTimeout             |  35        | UINT16  | 0x200000F6
-
+  gPlatformModuleTokenSpaceGuid.PcdFusaSupport            | FALSE      | BOOLEAN | 0x20000223
 
 [PcdsFixedAtBuild, PcdsPatchableInModule]
   #
@@ -218,6 +219,7 @@
   gPlatformModuleTokenSpaceGuid.PcdPciResourceMem64Base   | 0x0000000000000000  | UINT64     | 0x200001A3
 
 
+
 [PcdsFeatureFlag]
   # Determine if the Intel GFX device should be enabled or not in system
   gPlatformModuleTokenSpaceGuid.PcdIntelGfxEnabled        | TRUE       | BOOLEAN | 0x20000200
@@ -243,3 +245,6 @@
   gPlatformModuleTokenSpaceGuid.PcdLegacyEfSegmentEnabled | TRUE       | BOOLEAN | 0x20000214
   gPlatformModuleTokenSpaceGuid.PcdEnableDts              | FALSE      | BOOLEAN | 0x20000215
   gPlatformModuleTokenSpaceGuid.PcdEnablePciePm           | FALSE      | BOOLEAN | 0x20000222
+
+[PcdsDynamic]
+  gPlatformModuleTokenSpaceGuid.PcdFspResetStatus         | 0          | UINT32 | 0x20000224

@@ -25,7 +25,7 @@ class Board(BaseBoard):
 
         self.VERINFO_IMAGE_ID     = 'SBL_ADL'
         self.VERINFO_PROJ_MAJOR_VER = 1
-        self.VERINFO_PROJ_MINOR_VER = 2
+        self.VERINFO_PROJ_MINOR_VER = 3
         self.VERINFO_SVN            = 1
         self.VERINFO_BUILD_DATE     = time.strftime("%m/%d/%Y")
 
@@ -144,13 +144,16 @@ class Board(BaseBoard):
         self.UEFI_VARIABLE_SIZE = 0x1000
         if len(self._PAYLOAD_NAME.split(';')) > 1:
             self.UEFI_VARIABLE_SIZE = 0x00040000
-        self.UCODE_SIZE           = 0x000B7000
+        self.UCODE_SIZE           = 0x000C1000
         self.MRCDATA_SIZE         = 0x00010000
         self.CFGDATA_SIZE         = 0x00004000
         self.KEYHASH_SIZE         = 0x00001000
         self.VARIABLE_SIZE        = 0x00002000
         self.SBLRSVD_SIZE         = 0x00001000
         self.FWUPDATE_SIZE        = 0x00020000 if self.ENABLE_FWU else 0
+
+        self.OS_LOADER_FD_SIZE    = 0x00057000
+        self.OS_LOADER_FD_NUMBLK  = self.OS_LOADER_FD_SIZE // self.FLASH_BLOCK_SIZE
 
         self.TOP_SWAP_SIZE        = 0x00080000
         self.REDUNDANT_SIZE       = self.UCODE_SIZE + self.STAGE2_SIZE + self.STAGE1B_SIZE + \
@@ -303,9 +306,6 @@ class Board(BaseBoard):
 
         if self._LP_SUPPORT:
             dsc['PcdsFixedAtBuild'].append ('gPlatformAlderLakeTokenSpaceGuid.PcdAdlLpSupport | TRUE')
-
-        if self._N_SUPPORT:
-            dsc['PcdsFixedAtBuild'].append ('gPlatformAlderLakeTokenSpaceGuid.PcdAdlNSupport | TRUE')
 
         return dsc
 

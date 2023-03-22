@@ -1,6 +1,6 @@
 /** @file
 
-  Copyright (c) 2020 - 2022, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2020 - 2023, Intel Corporation. All rights reserved.<BR>
   SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
@@ -41,7 +41,6 @@
 #define CPU_PCIE_ULT_ULX_MAX_ROOT_PORT     3
 #define MAX_TCSS_USB3_PORTS                4
 #define TURBO_RATIO_LIMIT_ARRAY_SIZE       8
-
 
 //
 // This table contains data on INTx and IRQ for PCH-S
@@ -213,7 +212,7 @@ SI_PCH_DEVICE_INTERRUPT_CONFIG mPchNDevIntConfig[] = {
 //  {31, 0, PchNoInt, 0}, // LPC/eSPI Interface, doesn't use interrupts
 //  {31, 1, PchNoInt, 0}, // P2SB, doesn't use interrupts
 //  {31, 2, PchNoInt, 0}, // PMC , doesn't use interrupts
-  {31, 3, SiPchIntA, 16}, // cAVS(Audio, Voice, Speach), INTA is default, programmed in PciCfgSpace 3Dh
+  {31, 3, SiPchIntD, 19}, // cAVS(Audio, Voice, Speach), INTD is default, programmed in PciCfgSpace 3Dh
   {31, 4, SiPchIntA, 16}, // SMBus Controller, no default value, programmed in PciCfgSpace 3Dh
 //  {31, 5, PchNoInt, 0}, // SPI , doesn't use interrupts
   {31, 7, SiPchIntA, 16}, // TraceHub, INTA is default, RO register
@@ -466,12 +465,10 @@ TccModePostMemConfig (
     FspsUpd->FspsConfig.TccCacheCfgSize = TccCacheconfigSize;
     DEBUG ((DEBUG_INFO, "Load Tcc Cache @0x%p, size = 0x%x\n", TccCacheconfigBase, TccCacheconfigSize));
 
-    if (IsPchS ()) {
-      FspsUpd->FspsConfig.TccMode = 1;
-#ifdef PLATFORM_ADLS
-      FspsUpd->FspsConfig.L2QosEnumerationEn = 1;
+    FspsUpd->FspsConfig.TccMode = 1;
+#if FixedPcdGet8(PcdAdlNSupport) == 0
+    FspsUpd->FspsConfig.L2QosEnumerationEn = 1;
 #endif
-    }
   }
 
   // Load Tcc Crl binary from container
@@ -595,7 +592,7 @@ UpdateFspConfig (
     DEBUG (((BiosProtected) ? DEBUG_INFO : DEBUG_WARN, "BIOS SPI region will %a protected\n", (BiosProtected) ? "be" : "NOT BE"));
   }
 
-  if (PcdGetBool (PcdFramebufferInitEnabled)) {
+  if (PcdGetBool (PcdFramebufferInitEnabled) && (GetBootMode() != BOOT_ON_S3_RESUME)) {
     DEBUG ((DEBUG_INFO, "Frame Buffer Enabled\n"));
     FspsConfig->GraphicsConfigPtr = (UINT32)GetVbtAddress ();
     VbtPtr = (VBIOS_VBT_STRUCTURE*)(UINTN)(FspsConfig->GraphicsConfigPtr);
@@ -740,31 +737,34 @@ UpdateFspConfig (
     }
 
     // TSN feature support
-    if (IsPchS () || IsPchN () ) {
-      FspsConfig->PchTsnEnable = SiCfgData->PchTsnEnable;
-      if(SiCfgData->PchTsnEnable == 1) {
-        FspsConfig->PchTsnMultiVcEnable = SiCfgData->PchTsnMultiVcEnable;
+#if PLATFORM_RPLS || PLATFORM_RPLP || PLATFORM_RPLPCRB
+    FspsConfig->PchTsnEnable[0] = SiCfgData->PchTsnEnable;
+    FspsConfig->PchTsnEnable[1] = SiCfgData->PchTsnEnable;
+#else
+    FspsConfig->PchTsnEnable = SiCfgData->PchTsnEnable;
+#endif
+    if(SiCfgData->PchTsnEnable == 1) {
+      FspsConfig->PchTsnMultiVcEnable = SiCfgData->PchTsnMultiVcEnable;
 
-          if (IsPchLp ()) {
-            FspsConfig->PchTsnLinkSpeed = SiCfgData->PchTsnLinkSpeed;
-          }
+      if (IsPchLp ()) {
+        FspsConfig->PchTsnLinkSpeed = SiCfgData->PchTsnLinkSpeed;
+      }
 
-        TsnMacAddrBase      = NULL;
-        TsnMacAddrSize      = 0;
-        Status = LoadComponent (SIGNATURE_32 ('I', 'P', 'F', 'W'), SIGNATURE_32 ('T', 'M', 'A', 'C'),
-                                (VOID **)&TsnMacAddrBase, &TsnMacAddrSize);
-        if (!EFI_ERROR(Status)) {
-           TsnSubRegion = (TSN_MAC_ADDR_SUB_REGION*) TsnMacAddrBase;
+      TsnMacAddrBase      = NULL;
+      TsnMacAddrSize      = 0;
+      Status = LoadComponent (SIGNATURE_32 ('I', 'P', 'F', 'W'), SIGNATURE_32 ('T', 'M', 'A', 'C'),
+                              (VOID **)&TsnMacAddrBase, &TsnMacAddrSize);
+      if (!EFI_ERROR(Status)) {
+          TsnSubRegion = (TSN_MAC_ADDR_SUB_REGION*) TsnMacAddrBase;
 
-          FspsConfig->PchTsnMacAddressHigh  = TsnSubRegion->MacConfigData.Port[0].MacAddr.U32MacAddr[1];
-          FspsConfig->PchTsnMacAddressLow   = TsnSubRegion->MacConfigData.Port[0].MacAddr.U32MacAddr[0];
-          FspsConfig->PchTsn1MacAddressHigh = TsnSubRegion->MacConfigData.Port[1].MacAddr.U32MacAddr[1];
-          FspsConfig->PchTsn1MacAddressLow  = TsnSubRegion->MacConfigData.Port[1].MacAddr.U32MacAddr[0];
+        FspsConfig->PchTsnMacAddressHigh  = TsnSubRegion->MacConfigData.Port[0].MacAddr.U32MacAddr[1];
+        FspsConfig->PchTsnMacAddressLow   = TsnSubRegion->MacConfigData.Port[0].MacAddr.U32MacAddr[0];
+        FspsConfig->PchTsn1MacAddressHigh = TsnSubRegion->MacConfigData.Port[1].MacAddr.U32MacAddr[1];
+        FspsConfig->PchTsn1MacAddressLow  = TsnSubRegion->MacConfigData.Port[1].MacAddr.U32MacAddr[0];
 
-         DEBUG ((DEBUG_ERROR, "TSN MAC subregion completed %r\n", Status));
-        } else {
-          DEBUG ((DEBUG_ERROR, "TSN MAC subregion not found! %r\n", Status));
-        }
+        DEBUG ((DEBUG_ERROR, "TSN MAC subregion completed %r\n", Status));
+      } else {
+        DEBUG ((DEBUG_ERROR, "TSN MAC subregion not found! %r\n", Status));
       }
     }
   }
@@ -800,10 +800,6 @@ UpdateFspConfig (
 
   // PCH Flash protection
   FspsConfig->PchPwrOptEnable             = 0x1;
-  FspsConfig->PchWriteProtectionEnable[0] = 0x0;
-  FspsConfig->PchWriteProtectionEnable[1] = 0x0;
-  FspsConfig->PchProtectedRangeLimit[0]   = 0x1fff;
-  FspsConfig->PchProtectedRangeBase[0]    = 0x1070;
 
   // MISC
   FspsConfig->PchFivrExtV1p05RailVoltage = 0x1a4;
@@ -865,6 +861,7 @@ UpdateFspConfig (
       FspsConfig->EnableTimedGpio0 = 0;
       FspsConfig->EnableTimedGpio1 = 0;
       FspsConfig->PchLanEnable = 0x0;
+      ZeroMem (FspsConfig->CpuPcieRpMultiVcEnabled, sizeof (FspsConfig->CpuPcieRpMultiVcEnabled));
       ZeroMem (FspsConfig->PchIshI2cEnable, sizeof (FspsConfig->PchIshI2cEnable));
       ZeroMem (FspsConfig->PchIshGpEnable, sizeof (FspsConfig->PchIshGpEnable));
       DEBUG ((DEBUG_INFO, "Stage 2 S0ix config applied.\n"));
@@ -1128,10 +1125,10 @@ UpdateFspConfig (
       case PLATFORM_ID_ADL_N_DDR5_CRB:
         FspsConfig->PchLanEnable = 0x0;
         FspsConfig->PchPmVrAlert = 0x1;
-        FspsConfig->PchFivrExtV1p05RailEnabledStates = 0x3f;
+        FspsConfig->PchFivrExtV1p05RailEnabledStates = 0x1f;
         FspsConfig->PchFivrExtVnnRailEnabledStates = 0x3f;
         FspsConfig->PchFivrExtVnnRailSupportedVoltageStates = 0x4;
-        FspsConfig->PchFivrVccinAuxOffToHighCurModeVolTranTime = 0x0;
+        FspsConfig->PchFivrVccinAuxOffToHighCurModeVolTranTime = 0x96;
         FspsConfig->IomStayInTCColdSeconds = 0x0;
         FspsConfig->IomBeforeEnteringTCColdSeconds = 0x0;
         FspsConfig->UsbTcPortEn = 0x3;
@@ -1157,7 +1154,7 @@ UpdateFspConfig (
         FspsConfig->CnviBtAudioOffload = 0x1;
         FspsConfig->IomTypeCPortPadCfg[0] = 0x90e0016;
         FspsConfig->IomTypeCPortPadCfg[1] = 0x90e0017;
-        FspsConfig->VmdEnable = 1;
+        FspsConfig->VmdEnable = 0;
         FspsConfig->Irms[0] = 0x0;
         FspsConfig->Irms[1] = 0x0;
         FspsConfig->ThcMode[0] = 1;
@@ -1165,9 +1162,14 @@ UpdateFspConfig (
         FspsConfig->PortResetMessageEnable[1] = 0x0;
         FspsConfig->PortResetMessageEnable[2] = 0x0;
         FspsConfig->PortResetMessageEnable[4] = 0x0;
-        FspsConfig->AmtEnabled = 0x1;
+        FspsConfig->AmtEnabled = 0x0;
         FspsConfig->LidStatus = 0x5b;
         FspsConfig->TcssAuxOri = 0x1;
+        FspsConfig->Device4Enable = 0x0; //this controls the thermal device (B0,D4,F0)
+#ifdef PLATFORM_ADLN
+        FspsConfig->PchFivrVccstIccMaxControl = 0x1;
+#endif
+        CopyMem (FspsConfig->AtomTurboRatioLimitNumCore, PowerCfgData->AtomTurboRatioLimitNumCore, sizeof(PowerCfgData->AtomTurboRatioLimitNumCore));
         break;
       case PLATFORM_ID_ADL_N_LPDDR5_RVP:
         FspsConfig->PchLanEnable = 0x0;
@@ -1229,15 +1231,35 @@ UpdateFspConfig (
     }
   }
 
-  if (IsPchS () || IsPchN()) {
 #if FixedPcdGet8 (PcdTccEnabled)
-    Status = TccModePostMemConfig (FspsUpd);
+  Status = TccModePostMemConfig (FspsUpd);
 #endif
-  }
 
   if (FeaturePcdGet (PcdEnablePciePm)) {
     StoreRpConfig (FspsConfig);
   }
+
+#if FixedPcdGetBool(PcdFusaSupport)
+    if (SiCfgData != NULL) {
+      FspsConfig->FusaConfigEnable = SiCfgData->FusaConfigEnable;
+      FspsConfig->DisplayFusaConfigEnable = SiCfgData->DisplayFusaConfigEnable;
+      FspsConfig->GraphicFusaConfigEnable = SiCfgData->GraphicFusaConfigEnable;
+      FspsConfig->OpioFusaConfigEnable = SiCfgData->OpioFusaConfigEnable;
+      FspsConfig->IopFusaConfigEnable = SiCfgData->IopFusaConfigEnable;
+      FspsConfig->PsfFusaConfigEnable = SiCfgData->PsfFusaConfigEnable;
+      FspsConfig->FusaRunStartupArrayBist = SiCfgData->FusaRunStartupArrayBist;
+      FspsConfig->FusaRunStartupScanBist = SiCfgData->FusaRunStartupScanBist;
+      FspsConfig->FusaRunPeriodicScanBist = SiCfgData->FusaRunPeriodicScanBist;
+      FspsConfig->Module0Lockstep = SiCfgData->Module0Lockstep;
+      FspsConfig->Module1Lockstep = SiCfgData->Module1Lockstep;
+      if (SiCfgData->FusaConfigEnable)
+      {
+        DEBUG((DEBUG_INFO, "FuSa enabled. Disabling Bidir Prochot and enabling L2 CAT.\n"));
+        FspsConfig->BiProcHot = 0;
+        FspsConfig->L2QosEnumerationEn = 1;
+      }
+    }
+#endif
 }
 
 

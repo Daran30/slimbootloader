@@ -17,7 +17,6 @@
 #include <Library/DecompressLib.h>
 #include <Library/PayloadLib.h>
 #include <Library/ShellLib.h>
-#include <Library/IasImageLib.h>
 #include <Library/MultibootLib.h>
 #include <Library/MediaAccessLib.h>
 #include <Library/PayloadEntryLib.h>
@@ -86,6 +85,7 @@
 #define LOADED_IMAGE_COMPONENT   BIT6
 #define LOADED_IMAGE_RUN_EXTRA   BIT7
 #define LOADED_IMAGE_ELF         BIT8
+#define LOADED_IMAGE_MULTIBOOT2  BIT9
 
 #define MAX_EXTRA_FILE_NUMBER    16
 
@@ -168,6 +168,17 @@ Print out the Multiboot information block.
 VOID
 DumpMbInfo (
   IN  CONST MULTIBOOT_INFO *Mi
+  );
+
+/**
+Print out the Multiboot-2 information block.
+
+@param[in]  Mi  The Multiboot-2 information block to be printed.
+
+**/
+VOID
+DumpMb2Info (
+  IN  CONST MULTIBOOT2_START_TAG *Mi
   );
 
 /**

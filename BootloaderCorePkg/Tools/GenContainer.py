@@ -68,9 +68,9 @@ class CONTAINER_HDR (Structure):
     }
 
     _image_type = {
-      'NORMAL'     :  0x00,
-      'CLASSIC'    :  0xF3,
-      'MULTIBOOT'  :  0xF4,
+      'NORMAL'     :  0x00,                 # Used for boot images in FV, regular ELF, PE32, etc. formats
+      'CLASSIC'    :  0xF3,                 # Used for booting Linux with bzImage, cmdline, initrd, etc.
+      'MULTIBOOT'  :  0xF4,                 # Multiboot compliant ELF images
     }
 
     def __new__(cls, buf = None):
@@ -592,7 +592,10 @@ class CONTAINER ():
             auth_type_str = self.get_auth_type_str (self.header.auth_type)
             match = re.match('RSA(\d+)_', auth_type_str)
             if match:
-                key_file = 'KEY_ID_CONTAINER_RSA%s' % match.group(1)
+                if self.header.signature.decode() == 'BOOT':
+                    key_file = 'KEY_ID_OS1_PRIVATE_RSA%s' % match.group(1)
+                else:
+                    key_file = 'KEY_ID_CONTAINER_RSA%s' % match.group(1)
             else:
                 key_file = ''
             alignment = self.header.alignment

@@ -49,3 +49,5 @@
 [FixedPcd]
   gPlatformCommonLibTokenSpaceGuid.PcdTccEnabled
   gPlatformAlderLakeTokenSpaceGuid.PcdAdlLpSupport
+  gPlatformAlderLakeTokenSpaceGuid.PcdAdlNSupport
+  gPlatformModuleTokenSpaceGuid.PcdFusaSupport

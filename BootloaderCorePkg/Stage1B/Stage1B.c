@@ -384,10 +384,10 @@ SecStartup2 (
   // Perform pre-config board init
   BoardInit (PreConfigInit);
 
-  // Check if recovery is needed, if not in recovery path already
   if (PcdGetBool (PcdSblResiliencyEnabled)) {
+    // React to ACM failures here as the correct partition should be
+    // swapped to during pre-config init
     CheckForAcmFailures ();
-    CheckForTcoTimerFailures (PcdGet8 (PcdBootFailureThreshold));
   }
 
   Status = AppendHashStore (LdrGlobal, &Stage1bParam);
@@ -423,6 +423,15 @@ SecStartup2 (
   AddMeasurePoint (0x2030);
   FspResetHandler (Status);
   ASSERT_EFI_ERROR (Status);
+
+  if (PcdGetBool (PcdSblResiliencyEnabled)) {
+    // React to TCO timer failures here as not to conflict with ACM active timer
+    // which is stopped at end of FSP-M
+    CheckForTcoTimerFailures (PcdGet8 (PcdBootFailureThreshold));
+
+    // Start TCO timer here as ACM active timer is stopped at end of FSP-M
+    StartTcoTimer (PcdGet16 (PcdTcoTimeout));
+  }
 
   FspReservedMemBase = (UINT32)GetFspReservedMemoryFromGuid (
                          HobList,
@@ -642,15 +651,19 @@ ContinueFunc (
   IN VOID                      *Context2
   )
 {
-  STAGE1B_PARAM            *Stage1bParam;
-  STAGE2_PARAM             *Stage2Param;
-  UINT32                    StackBot;
-  UINT32                    Dst;
-  UINT32                    StackTop;
-  EFI_STATUS                Status;
-  LOADER_GLOBAL_DATA       *LdrGlobal;
-  LOADER_GLOBAL_DATA       *OldLdrGlobal;
-  TPMI_ALG_HASH             MbTmpAlgHash;
+  STAGE1B_PARAM               *Stage1bParam;
+  STAGE2_PARAM                *Stage2Param;
+  UINT32                      StackBot;
+  UINT32                      Dst;
+  UINT32                      StackTop;
+  EFI_STATUS                  Status;
+  LOADER_GLOBAL_DATA          *LdrGlobal;
+  LOADER_GLOBAL_DATA          *OldLdrGlobal;
+  TPMI_ALG_HASH               MbTmpAlgHash;
+  HASH_STORE_TABLE            *KeyHashBlob;
+  CDATA_BLOB                  *CfgDataBlob;
+  EFI_PLATFORM_FIRMWARE_BLOB  KeyHashFwBlob;
+  EFI_PLATFORM_FIRMWARE_BLOB  CfgDataFwBlob;
 
   Stage1bParam   = (STAGE1B_PARAM *)Context1;
   OldLdrGlobal = (LOADER_GLOBAL_DATA *)Context2;
@@ -697,22 +710,28 @@ ContinueFunc (
 
         // Extend External Config Data hash
         if (Stage1bParam->ConfigDataHashValid == 1) {
-          TpmExtendPcrAndLogEvent ( 1,
+          CfgDataBlob = LdrGlobal->CfgDataPtr;
+          CfgDataFwBlob.BlobBase = (UINT64)(UINTN)CfgDataBlob;
+          CfgDataFwBlob.BlobLength = CfgDataBlob->UsedLength;
+          TpmExtendPcrAndLogEvent (0,
                     MbTmpAlgHash,
                     Stage1bParam->ConfigDataHash,
-                    EV_EFI_VARIABLE_DRIVER_CONFIG,
-                    sizeof("Ext Config Data"),
-                     (UINT8 *)"Ext Config Data");
+                    EV_EFI_PLATFORM_FIRMWARE_BLOB,
+                    sizeof(CfgDataFwBlob),
+                    (UINT8 *)&CfgDataFwBlob);
         }
 
         // Extend Key hash manifest digest
         if (Stage1bParam->KeyHashManifestHashValid == 1) {
-          TpmExtendPcrAndLogEvent (1,
+          KeyHashBlob = LdrGlobal->HashStorePtr;
+          KeyHashFwBlob.BlobBase = (UINT64)(UINTN)KeyHashBlob;
+          KeyHashFwBlob.BlobLength = KeyHashBlob->UsedLength;
+          TpmExtendPcrAndLogEvent (0,
                     MbTmpAlgHash,
                     Stage1bParam->KeyHashManifestHash,
-                    EV_EFI_VARIABLE_DRIVER_CONFIG,
-                    sizeof("Key Manifest"),
-                     (UINT8 *)"Key Manifest");
+                    EV_EFI_PLATFORM_FIRMWARE_BLOB,
+                    sizeof(KeyHashFwBlob),
+                    (UINT8 *)&KeyHashFwBlob);
         }
     }
   }

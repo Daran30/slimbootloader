@@ -167,7 +167,7 @@ VerifySblVersion (
 EFI_STATUS
 VerifyFwVersion (
   IN  EFI_FW_MGMT_CAP_IMAGE_HEADER  *ImageHdr,
-  IN  FIRMWARE_UPDATE_POLICY  FwPolicy
+  IN  FIRMWARE_UPDATE_POLICY        FwPolicy
   )
 {
   UINT8                 SvnStatus;
@@ -194,7 +194,7 @@ VerifyFwVersion (
   //
   // Check SVN for ACM update
   //
-  if (((UINT32)ImageHdr->UpdateHardwareInstance) == FW_UPDATE_COMP_ACM0_REGION) {
+  if (((UINT32)ImageHdr->UpdateHardwareInstance) == FLASH_MAP_SIG_ACM) {
     DEBUG((DEBUG_INFO, "Capsule update is for ACM region!!\n"));
     Status = CheckAcmSvn (ImageHdr);
     return Status;
@@ -203,7 +203,7 @@ VerifyFwVersion (
   //
   // Allow all UCOD Updates
   //
-  if (((UINT32)ImageHdr->UpdateHardwareInstance) == FW_UPDATE_COMP_UCOD_REGION) {
+  if (((UINT32)ImageHdr->UpdateHardwareInstance) == FLASH_MAP_SIG_UCODE) {
     DEBUG((DEBUG_INFO, "Capsule update is for UCODE region!!\n"));
     return EFI_SUCCESS;
   }
@@ -399,15 +399,17 @@ SetStateMachineFlag (
   |  7C   |    1   | Clear IBB signal, reboot              |
   ----------------------------------------------------------
 
-  @param[in][out] FwPolicy    Pointer to Firmware update policy.
+  @param[in]  ContainsRedundant     Whether the capsule contains a redundant update.
+  @param[out] FwPolicy              Pointer to Firmware update policy.
 
   @retval  EFI_SUCCESS        The operation completed successfully.
   @retval  others             There is error happening.
 **/
 EFI_STATUS
 EnforceFwUpdatePolicy (
-  IN FIRMWARE_UPDATE_POLICY   *FwPolicy
- )
+  IN  BOOLEAN                  ContainsRedundant,
+  OUT FIRMWARE_UPDATE_POLICY   *FwPolicy
+  )
 {
   UINT8                   StateMachine;
   BOOLEAN                 ResetRequired;
@@ -435,15 +437,37 @@ EnforceFwUpdatePolicy (
   switch (StateMachine) {
   case FW_UPDATE_SM_CAP_PROCESSING:
     if (LoaderInfo->BootPartition == FW_UPDATE_PARTITION_A) {
-      FwPolicy->Fields.StateMachine       = FW_UPDATE_SM_PART_A;
-      FwPolicy->Fields.UpdatePartitionB   = 0x1;
-      FwPolicy->Fields.SwitchtoBackupPart = 0x1;
-      FwPolicy->Fields.Reboot             = 0x1;
+      //
+      // If no redundant regions being updated, no
+      // need to swap to other partition
+      //
+      if (ContainsRedundant) {
+        FwPolicy->Fields.StateMachine       = FW_UPDATE_SM_PART_A;
+        FwPolicy->Fields.UpdatePartitionB   = 0x1;
+        FwPolicy->Fields.SwitchtoBackupPart = 0x1;
+        FwPolicy->Fields.Reboot             = 0x1;
+      } else {
+        FwPolicy->Fields.StateMachine       = FW_UPDATE_SM_PART_AB;
+        FwPolicy->Fields.UpdatePartitionA   = 0x1;
+        FwPolicy->Fields.SwitchtoBackupPart = 0;
+        FwPolicy->Fields.Reboot             = 0;
+      }
     } else if (LoaderInfo->BootPartition == FW_UPDATE_PARTITION_B) {
-      FwPolicy->Fields.StateMachine       = FW_UPDATE_SM_PART_B;
-      FwPolicy->Fields.UpdatePartitionA   = 0x1;
-      FwPolicy->Fields.SwitchtoBackupPart = 0;
-      FwPolicy->Fields.Reboot             = 0x1;
+      //
+      // If no redundant regions being updated, no
+      // need to swap to other partition
+      //
+      if (ContainsRedundant) {
+        FwPolicy->Fields.StateMachine       = FW_UPDATE_SM_PART_B;
+        FwPolicy->Fields.UpdatePartitionA   = 0x1;
+        FwPolicy->Fields.SwitchtoBackupPart = 0;
+        FwPolicy->Fields.Reboot             = 0x1;
+      } else {
+        FwPolicy->Fields.StateMachine       = FW_UPDATE_SM_PART_AB;
+        FwPolicy->Fields.UpdatePartitionB   = 0x1;
+        FwPolicy->Fields.SwitchtoBackupPart = 0;
+        FwPolicy->Fields.Reboot             = 0;
+      }
     }
     break;
 
@@ -580,9 +604,9 @@ AfterUpdateEnforceFwUpdatePolicy (
 **/
 EFI_STATUS
 UpdateStatus (
-  IN UINT64     Signature,
-  IN UINT16     LastAttemptVersion,
-  IN EFI_STATUS LastAttemptStatus
+  IN UINT64                   Signature,
+  IN UINT16                   LastAttemptVersion,
+  IN EFI_STATUS               LastAttemptStatus
  )
 {
   UINT8                   Count;
@@ -901,8 +925,8 @@ IsCritCompUpdateFailed (
   This function will create component structures in the order in which they are
   found in the capsule image.
 
-  @param[in] FwImage          The pointer to the firmware update capsule image.
-  @param[in] FwSize           The size of capsule image in bytes.
+  @param[in]  FwImage             The pointer to the firmware update capsule image.
+  @param[in]  FwSize              The size of capsule image in bytes.
 
   @retval  EFI_SUCCESS        The operation completed successfully.
   @retval  others             There is error happening.
@@ -1085,6 +1109,70 @@ ProcessCapsule (
 }
 
 /**
+  Determine if capsule image contains redundant components.
+
+  @param[in]  CapImage          Pointer to the capsule image
+  @param[in]  CapImageSize      Size of the capsule image in bytes
+  @param[out] ContainsRedundant If the capsule image contains redundant components
+
+  @retval  EFI_SUCCESS          Successfully determined if capsule image contains
+                                redundant components
+  @retval  other                An error occurred
+**/
+EFI_STATUS
+CheckCapsuleForRedundant (
+  IN  UINT8                         *CapImage,
+  IN  UINT32                        CapImageSize,
+  OUT BOOLEAN                       *ContainsRedundant
+  )
+{
+  UINT16                          Count;
+  EFI_FW_MGMT_CAP_HEADER          *CapHeader;
+  FIRMWARE_UPDATE_HEADER          *FwUpdHeader;
+  EFI_FW_MGMT_CAP_IMAGE_HEADER    *CapImageHdr;
+  EFI_STATUS                      Status;
+
+  *ContainsRedundant = FALSE;
+  CapImageHdr = NULL;
+
+  FwUpdHeader = (FIRMWARE_UPDATE_HEADER *)CapImage;
+  if (FwUpdHeader == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  //
+  // If capsule header is NULL or no payloads found in the capsule
+  // return EFI_NOT_FOUND
+  //
+  CapHeader = (EFI_FW_MGMT_CAP_HEADER *)((UINTN)FwUpdHeader + FwUpdHeader->ImageOffset);
+  if ((CapHeader == NULL) || (CapHeader->PayloadItemCount == 0)) {
+    return EFI_NOT_FOUND;
+  }
+
+  //
+  // If a payload contains redundant component return EFI_SUCCESS
+  // and set ContainsRedundant
+  //
+  for (Count = 0; Count < CapHeader->PayloadItemCount; Count++) {
+    Status = GetPayloadHeaderByIndex (FwUpdHeader, CapHeader, Count, &CapImageHdr);
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
+
+    if (IsRedundantComponent (CapImageHdr->UpdateHardwareInstance)) {
+      *ContainsRedundant = TRUE;
+      return EFI_SUCCESS;
+    }
+  }
+
+  //
+  // If no payload contains redundant component return EFI_SUCCESS
+  // and leave ContainsRedundant unset
+  //
+  return EFI_SUCCESS;
+}
+
+/**
   Find payload in the capsule image.
 
   This function will parse through the capsule image to find the payload
@@ -1162,7 +1250,8 @@ FindImage (
   @param[in] CapImage       Pointer to the capsule Image
   @param[in] CapImageSize   Size of the capsule image in bytes
   @param[in] ImageHdr       Pointer to fw mgmt capsule Image header
-  @param[in] ResetRequired  Pointer to boolean reset required
+  @param[in] FwPolicy       Fw update policy
+  @param[out] ResetRequired Pointer to boolean reset required
 
   @retval  EFI_SUCCESS      Update successful.
   @retval  other            error status from the update routine
@@ -1172,7 +1261,8 @@ ApplyFwImage (
   IN    UINT8                         *CapImage,
   IN    UINT32                         CapImageSize,
   IN    EFI_FW_MGMT_CAP_IMAGE_HEADER  *ImageHdr,
-  OUT BOOLEAN                         *ResetRequired
+  IN    FIRMWARE_UPDATE_POLICY        FwPolicy,
+  OUT   BOOLEAN                       *ResetRequired
   )
 {
   EFI_STATUS              Status;
@@ -1198,7 +1288,7 @@ ApplyFwImage (
     if ((CapHdr->CapsuleFlags & CAPSULE_FLAG_FORCE_BIOS_UPDATE) != 0) {
       Status = UpdateFullBiosRegion (ImageHdr);
     } else {
-      Status = UpdateSystemFirmware (ImageHdr);
+      Status = UpdateSystemFirmware (ImageHdr, FwPolicy);
     }
     *ResetRequired = TRUE;
     break;
@@ -1238,10 +1328,37 @@ ApplyFwImage (
     Status = FwCmdUpdateProcess (ImageHdr);
     break;
   default:
-    Status = UpdateSblComponent (ImageHdr);
+    Status = UpdateSblComponent (ImageHdr, FwPolicy);
   }
 
   return Status;
+}
+
+/**
+  Check if component provided is part of a redundant region (either top
+  swap or redundant).
+
+  @param[in]  Signature The signature of the component
+
+  @retval     TRUE      The component is part of a redundant region
+  @retval     FALSE     The component is part of a nonredundant region
+**/
+BOOLEAN
+IsRedundantComponent (
+  IN  UINT64    Signature
+  )
+{
+  FLASH_MAP_ENTRY_DESC  *Entry;
+
+  if (Signature == FW_UPDATE_COMP_BIOS_REGION) {
+    return TRUE;
+  }
+
+  Entry = GetComponentEntryByPartition((UINT32)Signature, TRUE);
+  if (Entry == NULL) {
+    return FALSE;
+  }
+  return (Entry->Flags & FLASH_MAP_FLAGS_REDUNDANT_REGION) || (Entry->Flags & FLASH_MAP_FLAGS_TOP_SWAP);
 }
 
 /**
@@ -1258,24 +1375,27 @@ InitFirmwareUpdate (
   VOID
 )
 {
-  EFI_STATUS                  Status;
-  EFI_STATUS                  StatusPayloadUpdate;
-  UINT8                       Count;
-  VOID                        *CapsuleImage;
-  UINT32                      CapsuleSize;
-  UINT32                      FwUpdStatusOffset;
-  UINT32                      ByteOffset;
-  BOOLEAN                     ResetRequired;
-  FW_UPDATE_COMP_STATUS       FwUpdCompStatus[MAX_FW_COMPONENTS];
+  EFI_STATUS                    Status;
+  EFI_STATUS                    StatusPayloadUpdate;
+  UINT8                         Count;
+  VOID                          *CapsuleImage;
+  UINT32                        CapsuleSize;
+  UINT32                        FwUpdStatusOffset;
+  UINT32                        ByteOffset;
+  BOOLEAN                       ResetRequired;
+  FW_UPDATE_COMP_STATUS         FwUpdCompStatus[MAX_FW_COMPONENTS];
   FIRMWARE_UPDATE_HEADER        *FwUpdHdr;
   EFI_FW_MGMT_CAP_IMAGE_HEADER  *ImgHdr;
+  BOOLEAN                       ContainsRedundant;
+  FIRMWARE_UPDATE_POLICY        FwPolicy;
 
   ImgHdr = NULL;
   FwUpdStatusOffset = PcdGet32(PcdFwUpdStatusBase);
   ResetRequired = FALSE;
+  FwPolicy.Data = 0;
 
   //
-  // 1. Get capsule image.
+  // Get capsule image.
   //
   Status = GetCapsuleImage (&CapsuleImage, &CapsuleSize);
   if (EFI_ERROR (Status)) {
@@ -1283,7 +1403,7 @@ InitFirmwareUpdate (
   }
 
   //
-  // 2. Authenticate capsule image.
+  // Authenticate capsule image.
   //
   if (!EFI_ERROR (Status)) {
     DEBUG ((DEBUG_INFO, "CapsuleImage: 0x%p, CapsuleSize: 0x%X\n", CapsuleImage, CapsuleSize));
@@ -1294,7 +1414,7 @@ InitFirmwareUpdate (
   }
 
   //
-  // 3. Process capsule image.
+  // Process capsule image.
   //
   if (!EFI_ERROR (Status)) {
     Status = ProcessCapsule (CapsuleImage, CapsuleSize);
@@ -1304,13 +1424,23 @@ InitFirmwareUpdate (
   }
 
   //
-  // Read the component structure in the reserved region
+  // Read the component structure in the reserved region.
   //
   if (!EFI_ERROR (Status)) {
     Status = BootMediaRead ((FwUpdStatusOffset + sizeof(FW_UPDATE_STATUS)), \
                             MAX_FW_COMPONENTS * sizeof(FW_UPDATE_COMP_STATUS), (UINT8 *)&FwUpdCompStatus);
     if (EFI_ERROR (Status)) {
       DEBUG((DEBUG_ERROR, "BootMediaRead. offset: 0x%llx, Status = 0x%x\n", (FwUpdStatusOffset + sizeof(FW_UPDATE_STATUS)), Status));
+    }
+  }
+
+  //
+  // Check capsule for redundant components.
+  //
+  if (!EFI_ERROR (Status)) {
+    Status = CheckCapsuleForRedundant (CapsuleImage, CapsuleSize, &ContainsRedundant);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_ERROR, "CheckCapsuleForRedundant, Status = 0x%x\n", Status));
     }
   }
 
@@ -1331,7 +1461,7 @@ InitFirmwareUpdate (
     // Only expect a single BIOS component update.
     Status = FindImage (FwUpdCompStatus[0].HardwareInstance, CapsuleImage, CapsuleSize, &ImgHdr);
     if (!EFI_ERROR (Status)) {
-      Status = ApplyFwImage(CapsuleImage, CapsuleSize, ImgHdr, &ResetRequired);
+      Status = ApplyFwImage(CapsuleImage, CapsuleSize, ImgHdr, FwPolicy, &ResetRequired);
     }
     DEBUG ((DEBUG_INFO, "Full BIOS region update status: %r\n", Status));
     if (EFI_ERROR (Status)) {
@@ -1340,6 +1470,18 @@ InitFirmwareUpdate (
     }
     // Always reboot since full BIOS was updated
     Reboot (EfiResetCold);
+    return Status;
+  }
+
+  //
+  // Figure the current phase as well as the next phase of the FW update
+  //
+  Status = EnforceFwUpdatePolicy (ContainsRedundant, &FwPolicy);
+  if (EFI_ERROR (Status)) {
+    if (Status == EFI_ALREADY_STARTED) {
+      return EFI_SUCCESS;
+    }
+    DEBUG((DEBUG_ERROR, "EnforceFwUpdatePolicy: Status = 0x%x\n", Status));
     return Status;
   }
 
@@ -1373,10 +1515,10 @@ InitFirmwareUpdate (
       StatusPayloadUpdate = FindImage(FwUpdCompStatus[Count].HardwareInstance, CapsuleImage, CapsuleSize, &ImgHdr);
       if (!EFI_ERROR (StatusPayloadUpdate)) {
         //
-        // Start firmware udpate for the component, exclude CSME driver (CSMD)
+        // Start firmware update for the component, exclude CSME driver (CSMD)
         //
         if ((UINT32)ImgHdr->UpdateHardwareInstance != FW_UPDATE_COMP_CSME_DRIVER) {
-          StatusPayloadUpdate = ApplyFwImage(CapsuleImage, CapsuleSize, ImgHdr, &ResetRequired);
+          StatusPayloadUpdate = ApplyFwImage(CapsuleImage, CapsuleSize, ImgHdr, FwPolicy, &ResetRequired);
           if (EFI_ERROR (Status)) {
             DEBUG((DEBUG_ERROR, "ApplyFwImage (%04X:%04X) failed with Status = %r\n",
                   (UINT32)FwUpdCompStatus[Count].HardwareInstance, (UINT32)RShiftU64 (FwUpdCompStatus[Count].HardwareInstance, 32),
@@ -1400,9 +1542,13 @@ InitFirmwareUpdate (
       //
       // Update firmware update status of the component in reserved region
       //
-      Status = UpdateStatus(ImgHdr->UpdateHardwareInstance, (UINT16)ImgHdr->Version, StatusPayloadUpdate);
-      if (EFI_ERROR (Status)) {
-        DEBUG ((DEBUG_ERROR, "UpdateStatus failed! Status = %r\n", Status));
+      if ((IsRedundantComponent(ImgHdr->UpdateHardwareInstance) && FwPolicy.Fields.SwitchtoBackupPart == 0x0) ||
+          !IsRedundantComponent(ImgHdr->UpdateHardwareInstance) ||
+          EFI_ERROR(StatusPayloadUpdate)) {
+        Status = UpdateStatus (ImgHdr->UpdateHardwareInstance, (UINT16)ImgHdr->Version, StatusPayloadUpdate);
+        if (EFI_ERROR (Status)) {
+          DEBUG ((DEBUG_ERROR, "UpdateStatus failed! Status = %r\n", Status));
+        }
       }
 
       // Safety check: critical update must be successful, or the remaining update will be skipped
@@ -1425,6 +1571,21 @@ InitFirmwareUpdate (
 
   if (Count != MAX_FW_COMPONENTS) {
     return EFI_ABORTED;
+  }
+
+  //
+  // Setup for next phase of the FW update, if necessary
+  //
+  Status = AfterUpdateEnforceFwUpdatePolicy (FwPolicy);
+  if (EFI_ERROR (Status)) {
+    //
+    // If EFI_END_OF_FILE is returned, that means SBL update is successful
+    // return success to end firmware update.
+    //
+    if (Status != EFI_END_OF_FILE) {
+      DEBUG((DEBUG_ERROR, "AfterUpdateEnforceFwUpdatePolicy failed! Status = %r\n", Status));
+      return Status;
+    }
   }
 
   return EFI_SUCCESS;

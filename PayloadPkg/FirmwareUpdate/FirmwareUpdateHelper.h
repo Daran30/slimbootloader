@@ -12,6 +12,24 @@
 #include <Uefi/UefiBaseType.h>
 #include <Library/ResetSystemLib.h>
 
+///
+/// Structure to describe microcode header
+///
+typedef struct {
+  UINT32 HeaderVersion;  ///< Version number of the update header.
+  UINT32 UpdateRevision; ///< Unique version number for the update.
+  UINT32 Date;           ///< Date of the update creation.
+  UINT32 ProcessorId;    ///< Signature of the processor that requires this update.
+  UINT32 Checksum;       ///< Checksum of update data and header.
+  UINT32 LoaderRevision; ///< Version number of the microcode loader program.
+  UINT32 ProcessorFlags; ///< Lower 4 bits denoting platform type information.
+  UINT32 DataSize;       ///< Size of encoded data in bytes.
+  UINT32 TotalSize;      ///< Total size of microcode update in bytes.
+  UINT8  Reserved[12];   ///< Reserved bits.
+} CPU_MICROCODE_HEADER;
+
+#define PAD_BYTE  0xFF
+
 /**
   Update a region block.
 
@@ -81,6 +99,32 @@ VerifyFwVersion (
   );
 
 /**
+  Verify uCode internal structure
+
+  @param[in] ImageHdr     Pointer to the fw mgmt capsule image header
+
+  @retval  EFI_SUCCESS    The operation completed successfully.
+  @retval  others         There is error happening.
+**/
+EFI_STATUS
+VerifyUcodeStruct (
+  IN  EFI_FW_MGMT_CAP_IMAGE_HEADER  *ImageHdr
+  );
+
+/**
+  Verify the firmware internal structure.
+
+  @param[in] ImageHdr     Pointer to the fw mgmt capsule image header
+
+  @retval  EFI_SUCCESS    The operation completed successfully.
+  @retval  others         There is error happening.
+**/
+EFI_STATUS
+VerifyFwStruct (
+  IN  EFI_FW_MGMT_CAP_IMAGE_HEADER  *ImageHdr
+  );
+
+/**
   Set state machine flag in flash.
 
   This function will set state machine flag in the bootloader reserved region
@@ -104,24 +148,27 @@ SetStateMachineFlag (
   ----------------------------------------------------------
   |  SM   |   TS   |             Operation                 |
   ----------------------------------------------------------
-  |  FF   |    0   | Set SM to FE, Set TS and reboot       |
-  |  FF   |    1   | Set SM to FD, clear TS and reboot     |
-  |  FE   |    0   | Set TS and reboot                     |
-  |  FE   |    1   | Set SM to FC, clear TS and reboot     |
-  |  FD   |    0   | Set SM to FC, reboot                  |
-  |  FD   |    1   | clear TS and reboot                   |
-  |  FC   |    0   | Clear IBB signal,Set SM to FF, reboot |
-  |  FC   |    1   | Clear IBB signal,Set SM to FF, reboot |
+  |  7F   |    0   | Set SM to 7E, Set TS and reboot       |
+  |  7F   |    1   | Set SM to 7D, clear TS and reboot     |
+  |  7E   |    0   | Set TS and reboot                     |
+  |  7E   |    1   | Set SM to 7C, clear TS and reboot     |
+  |  7D   |    0   | Set SM to 7C, reboot                  |
+  |  7D   |    1   | clear TS and reboot                   |
+  |  7C   |    0   | Clear IBB signal, reboot              |
+  |  7C   |    1   | Clear IBB signal, reboot              |
   ----------------------------------------------------------
-  @param[in][out] FwPolicy    Pointer to Firmware update policy.
+
+  @param[in]  ContainsRedundant     Whether the capsule contains a redundant update.
+  @param[out] FwPolicy              Pointer to Firmware update policy.
 
   @retval  EFI_SUCCESS        The operation completed successfully.
   @retval  others             There is error happening.
 **/
 EFI_STATUS
 EnforceFwUpdatePolicy (
-  IN FIRMWARE_UPDATE_POLICY   *FwPolicy
- );
+  IN  BOOLEAN                  ContainsRedundant,
+  OUT FIRMWARE_UPDATE_POLICY   *FwPolicy
+  );
 
 /**
   This function will enforce firmware update policy after
@@ -158,13 +205,15 @@ UpdateFullBiosRegion (
   This function will update SBL or Configuration data alone.
 
   @param[in] ImageHdr       Pointer to fw mgmt capsule Image header
+  @param[in] FwPolicy       Fw update policy
 
   @retval  EFI_SUCCESS      Update successful.
   @retval  other            error occurred during firmware update
 **/
 EFI_STATUS
 UpdateSystemFirmware (
-  IN EFI_FW_MGMT_CAP_IMAGE_HEADER  *ImageHdr
+  IN EFI_FW_MGMT_CAP_IMAGE_HEADER  *ImageHdr,
+  IN FIRMWARE_UPDATE_POLICY        FwPolicy
   );
 
 /**
@@ -174,13 +223,15 @@ UpdateSystemFirmware (
   if found, will update the component.
 
   @param[in] ImageHdr       Pointer to fw mgmt capsule Image header
+  @param[in] FwPolicy       Fw update policy
 
   @retval  EFI_SUCCESS      Update successful.
   @retval  other            error occurred during firmware update
 **/
 EFI_STATUS
 UpdateSblComponent (
-  IN EFI_FW_MGMT_CAP_IMAGE_HEADER  *ImageHdr
+  IN EFI_FW_MGMT_CAP_IMAGE_HEADER  *ImageHdr,
+  IN FIRMWARE_UPDATE_POLICY        FwPolicy
   );
 
 
@@ -284,6 +335,20 @@ Reboot (
 UINT32
 GetRomImageOffsetInBiosRegion (
   VOID
+  );
+
+/**
+  Check if component provided is part of a redundant region (either top
+  swap or redundant).
+
+  @param[in]  Signature The signature of the component
+
+  @retval     TRUE      The component is part of a redundant region
+  @retval     FALSE     The component is part of a nonredundant region
+**/
+BOOLEAN
+IsRedundantComponent (
+  IN  UINT64    Signature
   );
 
 #endif
